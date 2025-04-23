@@ -20,7 +20,7 @@ ACTION_BACKUP = 'backup'
 
 def main():
     re_conflict = re.compile(r'^.+\.sync-conflict-.+')
-    re_timestamp = re.compile(r'sync-conflict-(\d{8})-(\d{6})-.*\.bak')
+    re_timestamp = re.compile(r'sync-conflict-(\d{8})-(\d{6})-[A-Z0-9]+')
     # Walk provided path, get all files matching "\.sync-conflict-.*"
     conflict_files = []
     for root, _, files in os.walk(args.path):
@@ -39,8 +39,21 @@ def main():
                     
                     # Create a conflict namedtuple and add to the list
                     conflict_path = os.path.join(root, file)
-                    file_path = os.path.basename(file).split('.sync-conflict-')[0]
-                    file_path = os.path.join(root, file_path)
+                    
+                    # Handle filenames with multiple extensions (e.g., file.txt.sync-conflict-...)
+                    base_name = os.path.basename(file)
+                    original_parts = base_name.split('.sync-conflict-')
+                    
+                    # Get the original filename with proper extension
+                    if len(original_parts) > 1:
+                        file_name = original_parts[0]
+                        # Check if there's an extension after the random identifier (XXXXX.extension)
+                        match_ext = re.search(r'[A-Z0-9]+\.(.+)$', original_parts[1])
+                        if match_ext:
+                            # Remove the extension from the conflict and use it for the original
+                            file_name = file_name
+                            
+                    file_path = os.path.join(root, file_name)
 
                     conflict_files.append(conflict_item(conflict_path=conflict_path, file_path=file_path, timestamp=timestamp))
 
@@ -85,16 +98,32 @@ def main():
                     'original_timestamp': original_timestamp
                 })
     
-    # Determine terminal width with a fallback to 80
-    terminal_width = shutil.get_terminal_size((80, 20)).columns
-    max_filename_length = terminal_width - 65  # Adjust based on expected width of other columns
+    # Fixed widths for action and timestamps
+    action_width = 10
+    timestamp_width = 19
     
-    # Prepare header
-    header = f"{'Filename'.ljust(max_filename_length)} | {'Action'.ljust(10)} | {'Original Time'.ljust(19)} | {'Conflict Time'.ljust(19)}"
-    separator = '-' * len(header)
+    # Try to get terminal width, fallback to 120 if not available
+    try:
+        terminal_width = shutil.get_terminal_size((120, 20)).columns
+    except Exception:
+        terminal_width = 120
     
-    print(header)
-    print(separator)
+    # Calculate space needed for other columns (including separators)
+    other_columns_width = action_width + (timestamp_width * 2) + 9  # 9 for the " | " separators
+    
+    # Allocate remaining space to filename, with a minimum width of 40
+    filename_width = max(40, terminal_width - other_columns_width)
+    
+    # Format column headers with dynamic filename width
+    header_format = f"{{:<{filename_width}}} | {{:<{action_width}}} | {{:<{timestamp_width}}} | {{:<{timestamp_width}}}"
+    row_format = header_format  # Use same format for data rows
+    
+    # Print header
+    print(header_format.format("Filename", "Action", "Original Time", "Conflict Time"))
+    
+    # Print separator line that matches header width exactly
+    separator_width = filename_width + other_columns_width
+    print("-" * separator_width)
     
     # Process all actions
     for action_info in actions:
@@ -111,13 +140,13 @@ def main():
         else:  # ACTION_BACKUP
             action_text = "BACKUP"
         
-        # Prepare filename for display
-        filename = conflict.file_path
-        if len(filename) > max_filename_length:
-            filename = '...' + filename[-(max_filename_length - 3):]
+        # Get the filename, truncate from left if too long
+        filename = conflict.conflict_path
+        if len(filename) > filename_width:
+            filename = "..." + filename[-(filename_width-3):]
         
-        # Print the row
-        print(f"{filename.ljust(max_filename_length)} | {action_text.ljust(10)} | {original_timestamp.ljust(19)} | {conflict_timestamp.ljust(19)}")
+        # Print the row with all columns properly aligned
+        print(row_format.format(filename, action_text, original_timestamp, conflict_timestamp))
         
         # Perform the action if not in dry run mode
         if not args.dry_run:
